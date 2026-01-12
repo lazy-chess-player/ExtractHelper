@@ -1,0 +1,7 @@
+name: extracthelper
+channels:
+  - defaults
+dependencies:
+  - python=3.10
+  - faiss-cpu
+prefix: D:\Miniconda\envs\extracthelper

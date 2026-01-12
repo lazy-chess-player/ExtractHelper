@@ -1,0 +1,26 @@
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.venv/
+venv/
+.env
+*.log
+
+# IDE
+.vscode/
+.idea/
+*.iml
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Data & models (do not commit)
+data/raw/
+data/kb/
+data/models/
+
+# Hugging Face cache (if outside data/kb)
+hf_home/
