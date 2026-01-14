@@ -17,15 +17,20 @@ from app.ingest.db import (
     mark_chunks_deleted_for_doc,
     insert_chunk,
 )
+# 注意：原代码中 delete_paths 是在 ingest.py 里定义的，我需要保持一致
+# db.py 里没有 delete_paths，所以我在这里保留它
+
 from app.retrieval.retrieve import add_to_delta_index
 from app.retrieval.build_index import build_index
 
 
 def _file_stat(p: Path) -> Tuple[float, int]:
+    """获取文件修改时间和大小"""
     st = p.stat()
     return float(st.st_mtime), int(st.st_size)
 
 def _sha256_file(p: Path, buf: int = 1 << 20) -> str:
+    """计算文件 SHA256 哈希值"""
     h = hashlib.sha256()
     with p.open("rb") as f:
         while True:
@@ -36,6 +41,10 @@ def _sha256_file(p: Path, buf: int = 1 << 20) -> str:
     return h.hexdigest()
 
 def _chunk_doc(doc: DocText):
+    """
+    对文档对象进行分块处理。
+    如果是 PDF (有 pages 信息)，则按页分块并保留页码。
+    """
     if doc.pages:
         out = []
         idx = 0
@@ -49,10 +58,21 @@ def _chunk_doc(doc: DocText):
     return simple_chunk(doc.text, CHUNK_SIZE, CHUNK_OVERLAP)
 
 def _ingest_one(conn, fp: Path, force: bool = False) -> int:
+    """
+    处理单个文件入库逻辑：
+    1. 检查文件是否已存在且未修改（基于 mtime + size）。
+    2. 计算哈希，读取内容。
+    3. 更新 documents 表。
+    4. 软删除旧 chunks，插入新 chunks。
+    5. 更新 Delta 索引。
+    
+    :return: 新生成的 chunk 数量
+    """
     path = str(fp)
     mtime, size = _file_stat(fp)
     row = get_document(conn, path)
 
+    # 增量更新检查
     if row and not force:
         doc_id, doc_type, file_hash, old_mtime, old_size, is_deleted = row
         if is_deleted == 0 and old_mtime == mtime and old_size == size:
@@ -75,12 +95,17 @@ def _ingest_one(conn, fp: Path, force: bool = False) -> int:
         new_texts.append(ch.text)
 
     conn.commit()
+    # 实时更新增量索引
     add_to_delta_index(new_ids, new_texts)
 
     print(f"[ingest] {fp.name}: {len(chunks)} chunks (updated)")
     return len(chunks)
 
 def delete_paths(paths: List[Path]) -> None:
+    """
+    批量删除文件（软删除）。
+    同时标记 document 和 chunks 为 is_deleted=1。
+    """
     conn = connect(DB_PATH)
     ensure_schema(conn)
 
@@ -98,6 +123,10 @@ def delete_paths(paths: List[Path]) -> None:
     conn.close()
 
 def sync_folder(folder: Path, force: bool = False) -> None:
+    """
+    同步整个文件夹。
+    处理新增/修改文件，并标记已不存在的文件为删除状态。
+    """
     conn = connect(DB_PATH)
     ensure_schema(conn)
 
@@ -106,7 +135,7 @@ def sync_folder(folder: Path, force: bool = False) -> None:
 
     file_set = set(str(p) for p in files)
 
-    # raw 不存在但 DB 里存在 -> 标记删除
+    # 检查 DB 中存在但磁盘已消失的文件 -> 标记删除
     rows = conn.execute("SELECT id, path FROM documents WHERE is_deleted=0").fetchall()
     for doc_id, path in rows:
         if path not in file_set:
@@ -122,6 +151,7 @@ def sync_folder(folder: Path, force: bool = False) -> None:
     print(f"[sync] done. changed_chunks={changed}. db={DB_PATH}")
 
 def compact_rebuild_index() -> None:
+    """调用 build_index 重建索引，物理清理已删除数据占用的空间"""
     build_index()
     print("[compact] base index rebuilt and delta cleared.")
 

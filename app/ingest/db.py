@@ -5,7 +5,14 @@ import sqlite3
 from pathlib import Path
 from typing import Optional
 
-# 只建表，不建依赖新列的索引（索引在 ensure_schema 末尾创建）
+"""
+数据库层 (SQLite)
+负责管理 documents 和 chunks 表的 Schema 定义、连接创建以及底层 CRUD 操作。
+"""
+
+# 表结构定义
+# documents: 存储文件元数据（路径、hash、修改时间等）
+# chunks: 存储切分后的文本片段
 SCHEMA_TABLES_SQL = """
 CREATE TABLE IF NOT EXISTS documents (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -33,6 +40,7 @@ CREATE TABLE IF NOT EXISTS chunks (
 );
 """
 
+# 索引定义
 INDEXES_SQL = """
 CREATE INDEX IF NOT EXISTS idx_chunks_doc_id ON chunks(doc_id);
 CREATE INDEX IF NOT EXISTS idx_chunks_active ON chunks(is_deleted, id);
@@ -40,6 +48,7 @@ CREATE INDEX IF NOT EXISTS idx_documents_active ON documents(is_deleted, id);
 """
 
 def connect(db_path: Path) -> sqlite3.Connection:
+    """创建并返回 SQLite 连接，启用 WAL 模式"""
     db_path.parent.mkdir(parents=True, exist_ok=True)
     conn = sqlite3.connect(str(db_path))
     conn.execute("PRAGMA journal_mode=WAL;")
@@ -47,20 +56,25 @@ def connect(db_path: Path) -> sqlite3.Connection:
     return conn
 
 def _col_exists(conn: sqlite3.Connection, table: str, col: str) -> bool:
+    """检查表中是否存在指定列"""
     rows = conn.execute(f"PRAGMA table_info({table})").fetchall()
     return any(r[1] == col for r in rows)
 
 def _add_column(conn: sqlite3.Connection, table: str, col: str, ddl: str) -> None:
-    # SQLite ADD COLUMN 没有 IF NOT EXISTS，所以用 PRAGMA 先判断
+    """幂等地添加列"""
     if _col_exists(conn, table, col):
         return
     conn.execute(f"ALTER TABLE {table} ADD COLUMN {col} {ddl}")
 
 def ensure_schema(conn: sqlite3.Connection) -> None:
-    # 1) 先保证表存在（对旧库不会改已有表结构）
+    """
+    确保数据库 Schema 是最新的。
+    包含表创建、新列补齐（Migration）和索引创建。
+    """
+    # 1) 先保证表存在
     conn.executescript(SCHEMA_TABLES_SQL)
 
-    # 2) 再对旧库补齐新列（必须在创建依赖列的索引之前）
+    # 2) 补齐后续版本新增的列
     # documents
     _add_column(conn, "documents", "file_hash", "TEXT")
     _add_column(conn, "documents", "file_mtime", "REAL")
@@ -73,15 +87,16 @@ def ensure_schema(conn: sqlite3.Connection) -> None:
 
     conn.commit()
 
-    # 3) 最后再创建索引（现在 is_deleted 一定存在，不会再报 no such column）
+    # 3) 创建索引
     conn.executescript(INDEXES_SQL)
     conn.commit()
 
-# 兼容旧代码：你原来叫 init_db
+# 兼容旧代码别名
 def init_db(conn: sqlite3.Connection) -> None:
     ensure_schema(conn)
 
 def get_document(conn: sqlite3.Connection, path: str):
+    """根据路径查询文档记录"""
     return conn.execute(
         """
         SELECT id, doc_type, file_hash, file_mtime, file_size, is_deleted
@@ -99,6 +114,10 @@ def upsert_document(
     file_mtime: Optional[float] = None,
     file_size: Optional[int] = None,
 ) -> int:
+    """
+    插入或更新文档记录。
+    如果路径已存在，则更新元数据并将 is_deleted 置为 0。
+    """
     conn.execute(
         """
         INSERT INTO documents(path, doc_type, file_hash, file_mtime, file_size, is_deleted)
@@ -117,16 +136,18 @@ def upsert_document(
     return int(row[0])
 
 def mark_document_deleted(conn: sqlite3.Connection, doc_id: int) -> None:
+    """软删除文档"""
     conn.execute("UPDATE documents SET is_deleted=1 WHERE id=?", (doc_id,))
 
 def mark_chunks_deleted_for_doc(conn: sqlite3.Connection, doc_id: int) -> None:
+    """软删除指定文档下的所有 chunks"""
     conn.execute(
         "UPDATE chunks SET is_deleted=1 WHERE doc_id=? AND is_deleted=0",
         (doc_id,),
     )
 
-# 兼容旧代码名字：clear_chunks_for_doc（现在默认软删除）
 def clear_chunks_for_doc(conn: sqlite3.Connection, doc_id: int) -> None:
+    """兼容别名：清除（软删除）文档 chunks"""
     mark_chunks_deleted_for_doc(conn, doc_id)
 
 def _hash_text(t: str) -> str:
@@ -141,6 +162,7 @@ def insert_chunk(
     content: str,
     page: Optional[int],
 ) -> int:
+    """插入单个 chunk 记录"""
     chash = _hash_text(content)
     cur = conn.execute(
         """
