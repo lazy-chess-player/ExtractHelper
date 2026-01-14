@@ -11,8 +11,6 @@ from typing import Optional
 """
 
 # 表结构定义
-# documents: 存储文件元数据（路径、hash、修改时间等）
-# chunks: 存储切分后的文本片段
 SCHEMA_TABLES_SQL = """
 CREATE TABLE IF NOT EXISTS documents (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -38,6 +36,25 @@ CREATE TABLE IF NOT EXISTS chunks (
 
   FOREIGN KEY(doc_id) REFERENCES documents(id)
 );
+
+-- Chat History Support
+CREATE TABLE IF NOT EXISTS sessions (
+  id TEXT PRIMARY KEY,
+  title TEXT,
+  created_at REAL,
+  updated_at REAL
+);
+
+CREATE TABLE IF NOT EXISTS messages (
+  id TEXT PRIMARY KEY,
+  session_id TEXT NOT NULL,
+  role TEXT NOT NULL,
+  content TEXT NOT NULL,
+  evidence TEXT, -- JSON
+  created_at REAL,
+  
+  FOREIGN KEY(session_id) REFERENCES sessions(id) ON DELETE CASCADE
+);
 """
 
 # 索引定义
@@ -45,12 +62,16 @@ INDEXES_SQL = """
 CREATE INDEX IF NOT EXISTS idx_chunks_doc_id ON chunks(doc_id);
 CREATE INDEX IF NOT EXISTS idx_chunks_active ON chunks(is_deleted, id);
 CREATE INDEX IF NOT EXISTS idx_documents_active ON documents(is_deleted, id);
+
+CREATE INDEX IF NOT EXISTS idx_messages_session ON messages(session_id, created_at);
+CREATE INDEX IF NOT EXISTS idx_sessions_updated ON sessions(updated_at DESC);
 """
 
 def connect(db_path: Path) -> sqlite3.Connection:
     """创建并返回 SQLite 连接，启用 WAL 模式"""
     db_path.parent.mkdir(parents=True, exist_ok=True)
-    conn = sqlite3.connect(str(db_path))
+    # check_same_thread=False 允许在不同线程中使用连接（配合 NiceGUI/Asyncio）
+    conn = sqlite3.connect(str(db_path), check_same_thread=False)
     conn.execute("PRAGMA journal_mode=WAL;")
     conn.execute("PRAGMA foreign_keys=ON;")
     return conn
@@ -172,3 +193,58 @@ def insert_chunk(
         (doc_id, chunk_index, page, content, chash),
     )
     return int(cur.lastrowid)
+
+# -----------------------------------------------------------------------------
+# Chat Session Management
+# -----------------------------------------------------------------------------
+
+def create_session(conn: sqlite3.Connection, session_id: str, title: str, now: float) -> None:
+    conn.execute(
+        "INSERT INTO sessions(id, title, created_at, updated_at) VALUES(?, ?, ?, ?)",
+        (session_id, title, now, now)
+    )
+
+def list_sessions(conn: sqlite3.Connection, limit: int = 50):
+    return conn.execute(
+        "SELECT id, title, updated_at FROM sessions ORDER BY updated_at DESC LIMIT ?",
+        (limit,)
+    ).fetchall()
+
+def get_session(conn: sqlite3.Connection, session_id: str):
+    return conn.execute("SELECT id, title FROM sessions WHERE id=?", (session_id,)).fetchone()
+
+def update_session_title(conn: sqlite3.Connection, session_id: str, title: str):
+    conn.execute("UPDATE sessions SET title=? WHERE id=?", (title, session_id))
+
+def update_session_time(conn: sqlite3.Connection, session_id: str, now: float):
+    conn.execute("UPDATE sessions SET updated_at=? WHERE id=?", (now, session_id))
+
+def delete_session(conn: sqlite3.Connection, session_id: str):
+    # messages will be deleted by cascade if supported, but let's be safe
+    conn.execute("DELETE FROM messages WHERE session_id=?", (session_id,))
+    conn.execute("DELETE FROM sessions WHERE id=?", (session_id,))
+
+def add_message(
+    conn: sqlite3.Connection, 
+    msg_id: str, 
+    session_id: str, 
+    role: str, 
+    content: str, 
+    evidence_json: Optional[str], 
+    now: float
+) -> None:
+    conn.execute(
+        """
+        INSERT INTO messages(id, session_id, role, content, evidence, created_at)
+        VALUES(?, ?, ?, ?, ?, ?)
+        """,
+        (msg_id, session_id, role, content, evidence_json, now)
+    )
+    # update session time
+    update_session_time(conn, session_id, now)
+
+def get_messages(conn: sqlite3.Connection, session_id: str):
+    return conn.execute(
+        "SELECT role, content, evidence FROM messages WHERE session_id=? ORDER BY created_at ASC",
+        (session_id,)
+    ).fetchall()
