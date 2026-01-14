@@ -1,26 +1,60 @@
-# Python
+# Python 相关
 __pycache__/
 *.pyc
 *.pyo
 *.pyd
 .venv/
 venv/
+env/
 .env
 *.log
 
-# IDE
+# 分发 / 打包
+build/
+dist/
+*.egg-info/
+*.egg
+MANIFEST
+
+# 单元测试 / 覆盖率
+.tox/
+.nox/
+.coverage
+.coverage.*
+.cache
+nosetests.xml
+coverage.xml
+*.cover
+*.log
+.pytest_cache/
+.mypy_cache/
+
+# IDE 编辑器配置
 .vscode/
 .idea/
+.trae/
 *.iml
+*.swp
+*.swo
 
-# OS
+# 操作系统文件
 .DS_Store
 Thumbs.db
+ehthumbs.db
+Desktop.ini
 
-# Data & models (do not commit)
+# 数据和模型 (不要提交)
 data/raw/
 data/kb/
 data/models/
+data/processed/
 
-# Hugging Face cache (if outside data/kb)
+# Hugging Face 缓存 (如果在 data/kb 之外)
 hf_home/
+
+# ChromaDB 数据库
+chroma_db/
+chroma.sqlite3
+
+# 调试 / 临时文件
+debug/
