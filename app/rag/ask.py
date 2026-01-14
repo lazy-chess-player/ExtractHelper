@@ -74,7 +74,8 @@ def build_system_message() -> dict:
     return {
         "role": "system",
         "content": (
-            "你是一个本地知识库助手，只能根据我提供的资料回答，禁止编造。"
+            "你是一个本地知识库助手，请根据提供的资料详细回答问题。"
+            "如果资料内容丰富，请尽可能全面、详细地整理和总结。"
             "【硬性要求】每句话末尾必须标注引用，格式只能是 [1] 或 [2] 或 [1][2]…（对应 Doc 编号）。"
             "如果资料不足，直接回答“资料中没有/不确定”，并同样给出引用（引用最相关的 Doc）。"
             "这是一个多轮对话场景，你需要在保证基于当前轮资料的前提下，结合对话历史保持答案连贯。"
@@ -111,7 +112,7 @@ def answer_once(llm: Llama, query: str, history: list[dict] | None = None, top_k
     out = llm.create_chat_completion(
         messages=messages,
         temperature=0.2, # 低温度以减少幻觉
-        max_tokens=512,
+        max_tokens=2048,
     )
     answer = out["choices"][0]["message"]["content"]
     return answer, evidence
